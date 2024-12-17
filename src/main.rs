@@ -1,43 +1,82 @@
 fn main() {
-    struct MonSlabNul {
-        blocs: Vec<[u8; 16]>,    
-        libre: Vec<bool>,    
+    #[derive(Debug)]
+    enum StatutBloc {
+        Libre,
+        Occupe { donnees: String }
     }
  
-    impl MonSlabNul {
-        fn new() -> MonSlabNul {
-            MonSlabNul {
+    struct MonSlab {
+        blocs: Vec<[u8; 32]>,             
+        statut: Vec<StatutBloc>,          
+        nb_libre: usize,                   
+    }
+ 
+    impl MonSlab {
+        fn new() -> MonSlab {
+            MonSlab {
                 blocs: Vec::new(),
-                libre: Vec::new(),
+                statut: Vec::new(),
+                nb_libre: 0,
             }
         }
  
-        fn alloue(&mut self) -> Option<usize> {
-            if let Some(pos) = self.libre.iter().position(|&x| x == true) {
-                self.libre[pos] = false;
+        fn alloue(&mut self, data: String) -> Option<usize> {
+            if data.len() > 32 {
+                println!("oula c trop gros");
+                return None;
+            }
+ 
+            if let Some(pos) = self.statut.iter().position(|x| matches!(x, StatutBloc::Libre)) {
+                self.blocs[pos][..data.len()].copy_from_slice(data.as_bytes());
+                self.statut[pos] = StatutBloc::Occupe { donnees: data };
+                self.nb_libre -= 1;
                 return Some(pos);
             }
-            self.blocs.push([0; 16]);
-            self.libre.push(false);
+ 
+            let mut nouveau = [0; 32];
+            nouveau[..data.len()].copy_from_slice(data.as_bytes());
+            self.blocs.push(nouveau);
+            self.statut.push(StatutBloc::Occupe { donnees: data });
             Some(self.blocs.len() - 1)
         }
  
-        fn libere(&mut self, pos: usize) {
-            if pos < self.libre.len() {
-                self.libre[pos] = true;
+        fn libere(&mut self, pos: usize) -> bool {
+            if pos >= self.statut.len() {
+                println!("position nawak");
+                return false;
+            }
+ 
+            if matches!(self.statut[pos], StatutBloc::Libre) {
+                println!("deja libre");
+                return false;
+            }
+ 
+            self.statut[pos] = StatutBloc::Libre;
+            self.nb_libre += 1;
+            true
+        }
+ 
+        fn debug_info(&self) {
+            println!("---debug de ouf---");
+            println!("total blocs: {}", self.blocs.len());
+            println!("blocs libres: {}", self.nb_libre);
+            for (i, statut) in self.statut.iter().enumerate() {
+                println!("bloc {}: {:?}", i, statut);
             }
         }
     }
  
-    // test rapide
-    let mut slab = MonSlabNul::new();
-    println!("je test mon slab");
-    let bloc1 = slab.alloue();
-    let bloc2 = slab.alloue();
-
-    println!("mes blocs : {:?} et {:?}", bloc1, bloc2);
-
-    slab.libere(0);
-    let bloc3 = slab.alloue();
-    println!("nouveau bloc apres libération :{:?}", bloc3);
+    let mut slab = MonSlab::new();
+    
+    let pos1 = slab.alloue(String::from("test1")).unwrap();
+    let pos2 = slab.alloue(String::from("test2")).unwrap();
+    
+    slab.debug_info();
+    
+    slab.libere(pos1);
+    let pos3 = slab.alloue(String::from("test3")).unwrap();
+    
+    slab.debug_info();
+ 
+    slab.alloue(String::from("une string beaucoup trop longue pour rentrer dans un bloc"));
  }
