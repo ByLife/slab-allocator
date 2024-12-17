@@ -1,3 +1,2 @@
 mod slab;
-pub use slab::MonSlab;
-pub use slab::StatutBloc;
+pub use slab::{MonSlab, StatutBloc, Taille};
