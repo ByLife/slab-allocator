@@ -1,21 +1,43 @@
 fn main() {
-    let tab = [1, 2, 3, 4, 5];
-    
-    let mut vec = Vec::new();
-    vec.push(1);
-    vec.push(2);
-    vec.push(3);
-    
-    let stro = String::from("salut");
-    
-    let boite = Box::new(42);
-    
-    let mut str_test = String::with_capacity(20);
-    str_test.push_str("test");
-    
-    println!("mon tab: {:?}", tab);
-    println!("mon vec: {:?}", vec);
-    println!("ma string lol: {}", stro);
-    println!("ma boite chelou: {}", boite);
-    println!("str de test: {} (capa: {})", str_test, str_test.capacity());
+    struct MonSlabNul {
+        blocs: Vec<[u8; 16]>,    
+        libre: Vec<bool>,    
+    }
+ 
+    impl MonSlabNul {
+        fn new() -> MonSlabNul {
+            MonSlabNul {
+                blocs: Vec::new(),
+                libre: Vec::new(),
+            }
+        }
+ 
+        fn alloue(&mut self) -> Option<usize> {
+            if let Some(pos) = self.libre.iter().position(|&x| x == true) {
+                self.libre[pos] = false;
+                return Some(pos);
+            }
+            self.blocs.push([0; 16]);
+            self.libre.push(false);
+            Some(self.blocs.len() - 1)
+        }
+ 
+        fn libere(&mut self, pos: usize) {
+            if pos < self.libre.len() {
+                self.libre[pos] = true;
+            }
+        }
+    }
+ 
+    // test rapide
+    let mut slab = MonSlabNul::new();
+    println!("je test mon slab");
+    let bloc1 = slab.alloue();
+    let bloc2 = slab.alloue();
+
+    println!("mes blocs : {:?} et {:?}", bloc1, bloc2);
+
+    slab.libere(0);
+    let bloc3 = slab.alloue();
+    println!("nouveau bloc apres libération :{:?}", bloc3);
  }
