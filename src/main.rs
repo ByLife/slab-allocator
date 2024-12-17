@@ -1,18 +1,29 @@
-use slab_allocator::{MonSlab, Taille};
+use slab_allocator::SlabAlloc;
 
 fn main() {
-    let mut slab = MonSlab::new();
+    let mut allocator = SlabAlloc::new();
     
-    let pos1 = slab.alloue(String::from("petit test")).unwrap();
-    let pos2 = slab.alloue(String::from("test un peu plus long pour pool moyen")).unwrap();
-    let pos3 = slab.alloue(String::from("test".repeat(100))).unwrap();
+    println!("test d'alloc");
+    let ptr1 = allocator.alloc().unwrap();
+    let ptr2 = allocator.alloc().unwrap();
     
-    slab.debug_info();
+    unsafe {
+        ptr1.write(42);
+        ptr2.write(24);
+    }
     
-    slab.libere(pos1.0, pos1.1);
-    let pos4 = slab.alloue(String::from("nouveau petit test")).unwrap();
+    let (used, total) = allocator.get_stats();
+    println!("Stats: {}/{} chunks used", used, total);
     
-    slab.debug_info();
-
-    slab.alloue(String::from("test".repeat(1000)));
+    println!("libération de la première allocation");
+    allocator.free(ptr1).unwrap();
+    let ptr3 = allocator.alloc().unwrap();
+    
+    unsafe {
+        ptr3.write(33);
+        println!("Values : {}, {}", ptr2.read(), ptr3.read());
+    }
+    
+    let (used_after, total_after) = allocator.get_stats();
+    println!("Stats : {}/{} chunks used", used_after, total_after);
 }

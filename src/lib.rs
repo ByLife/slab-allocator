@@ -1,2 +1,3 @@
+#![no_std]
 mod slab;
-pub use slab::{MonSlab, StatutBloc, Taille};
+pub use slab::SlabAlloc;
