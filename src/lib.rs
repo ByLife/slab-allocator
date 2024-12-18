@@ -1,3 +1,6 @@
-#![no_std]
 mod slab;
-pub use slab::SlabAlloc;
+mod chunk;
+mod error;
+
+pub use slab::SlabAllocator;
+pub use error::AllocError;
