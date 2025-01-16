@@ -1,20 +1,11 @@
 use core::alloc::Layout;
 use crate::{chunk::ChunkMetadata, error::AllocError};
 
-#[derive(Debug)]
-pub struct Stats {
-    pub free_small: usize,
-    pub free_medium: usize,
-    pub free_large: usize,
-    pub total_chunks: usize,
-}
-
 const SIZES: [usize; 3] = [32, 64, 128];
 const ALIGNMENTS: [usize; 3] = [8, 16, 32];
 const CHUNKS_PER_POOL: usize = 21;
 const TOTAL_MEMORY: usize = 4096;
 
-/// allocateur de mémoire slab
 #[repr(C)]
 pub struct SlabAllocator {
     memory: [u8; TOTAL_MEMORY],
@@ -23,7 +14,6 @@ pub struct SlabAllocator {
 }
 
 impl SlabAllocator {
-    /// nouvelle instance de l'allocateur
     #[inline]
     pub const fn new() -> Self {
         const INIT_CHUNK: ChunkMetadata = ChunkMetadata::new(0, 0);
@@ -35,13 +25,11 @@ impl SlabAllocator {
         }
     }
 
-    /// initialise l'allocateur
     #[inline]
     pub fn init(&mut self) {
         let mut offset = 0;
         let mut chunk_idx = 0;
         
-        // on check le premier alignement
         offset = align_up(offset, ALIGNMENTS[2]);
         
         for (pool_idx, &size) in SIZES.iter().enumerate() {
@@ -57,17 +45,14 @@ impl SlabAllocator {
         }
     }
 
-    /// alloue bloc memoire de taille `layout.size()` et alignement `layout.align()`
     #[inline]
     pub fn alloc(&mut self, layout: Layout) -> Result<*mut u8, AllocError> {
-        // Vérification rapide de la taille maximale
         if layout.size() > SIZES[2] {
             return Err(AllocError::SizeTooLarge);
         }
 
         let pool_idx = self.get_pool_index(layout)?;
         
-        // Recherche d'un chunk libre dans le pool approprié
         let start_idx = pool_idx * CHUNKS_PER_POOL;
         let end_idx = start_idx + CHUNKS_PER_POOL;
         
@@ -85,7 +70,6 @@ impl SlabAllocator {
 
     #[inline]
     pub fn free(&mut self, ptr: *mut u8) -> Result<(), AllocError> {
-        // Vérif pointeur
         if !self.is_ptr_valid(ptr) {
             return Err(AllocError::InvalidPointer);
         }
@@ -94,21 +78,28 @@ impl SlabAllocator {
             ptr.offset_from(self.memory.as_ptr()) as usize
         };
         
-        // Recherche du chunk 
-        for (i, chunk) in self.chunks.iter_mut().enumerate() {
+        let mut chunk_idx = None;
+        let mut chunk_size = 0;
+        
+        for (idx, chunk) in self.chunks.iter().enumerate() {
             if chunk.offset() == offset {
                 if !chunk.is_used() {
                     return Err(AllocError::InvalidFree);
                 }
-                
-                chunk.mark_free();
-                let pool_idx = self.get_chunk_pool_index(chunk.size());
-                self.free_counts[pool_idx] += 1;
-                return Ok(());
+                chunk_idx = Some(idx);
+                chunk_size = chunk.size();
+                break;
             }
         }
-        
-        Err(AllocError::InvalidPointer)
+
+        if let Some(idx) = chunk_idx {
+            let pool_idx = self.get_chunk_pool_index(chunk_size);
+            self.chunks[idx].mark_free();
+            self.free_counts[pool_idx] += 1;
+            Ok(())
+        } else {
+            Err(AllocError::InvalidPointer)
+        }
     }
 
     #[inline]
@@ -155,4 +146,12 @@ impl SlabAllocator {
 #[inline]
 const fn align_up(addr: usize, align: usize) -> usize {
     (addr + align - 1) & !(align - 1)
+}
+
+#[derive(Debug)]
+pub struct Stats {
+    pub free_small: usize,
+    pub free_medium: usize,
+    pub free_large: usize,
+    pub total_chunks: usize,
 }
