@@ -5,43 +5,53 @@ const SIZES: [usize; 3] = [32, 64, 128];
 const ALIGNMENTS: [usize; 3] = [8, 16, 32];
 const CHUNKS_PER_POOL: usize = 21;
 const TOTAL_MEMORY: usize = 4096;
+const TOTAL_CHUNKS: usize = CHUNKS_PER_POOL * 3;
 
-#[repr(C)]
+// Vérifications statiques via const generics
+const _: () = assert!(TOTAL_CHUNKS <= 64);
+const _: () = assert!(SIZES[0] >= ALIGNMENTS[0]);
+const _: () = assert!(SIZES[1] >= ALIGNMENTS[1]);
+const _: () = assert!(SIZES[2] >= ALIGNMENTS[2]);
+
+#[repr(C, align(32))]
 pub struct SlabAllocator {
     memory: [u8; TOTAL_MEMORY],
     chunks: [ChunkMetadata; 64],
+    free_lists: [Option<usize>; 3],
     free_counts: [usize; 3],
 }
 
 impl SlabAllocator {
     #[inline]
     pub const fn new() -> Self {
-        const INIT_CHUNK: ChunkMetadata = ChunkMetadata::new(0, 0);
-        
+        const INIT_CHUNK: ChunkMetadata = ChunkMetadata::new(0, 0, None);
         SlabAllocator {
             memory: [0; TOTAL_MEMORY],
             chunks: [INIT_CHUNK; 64],
+            free_lists: [None; 3],
             free_counts: [0; 3],
         }
     }
 
     #[inline]
     pub fn init(&mut self) {
-        let mut offset = 0;
-        let mut chunk_idx = 0;
+        let mut offset = align_up(0, ALIGNMENTS[2]);
         
-        offset = align_up(offset, ALIGNMENTS[2]);
-        
-        for (pool_idx, &size) in SIZES.iter().enumerate() {
+        for pool_idx in 0..3 {
             self.free_counts[pool_idx] = CHUNKS_PER_POOL;
+            let mut prev = None;
             
-            for _ in 0..CHUNKS_PER_POOL {
-                if chunk_idx < self.chunks.len() {
-                    self.chunks[chunk_idx] = ChunkMetadata::new(offset, size);
-                    offset = align_up(offset + size, ALIGNMENTS[pool_idx]);
-                    chunk_idx += 1;
-                }
+            for chunk_idx in (pool_idx * CHUNKS_PER_POOL)..((pool_idx + 1) * CHUNKS_PER_POOL) {
+                self.chunks[chunk_idx] = ChunkMetadata::new(
+                    offset,
+                    SIZES[pool_idx],
+                    prev
+                );
+                offset = align_up(offset + SIZES[pool_idx], ALIGNMENTS[pool_idx]);
+                prev = Some(chunk_idx);
             }
+            
+            self.free_lists[pool_idx] = prev;
         }
     }
 
@@ -53,19 +63,16 @@ impl SlabAllocator {
 
         let pool_idx = self.get_pool_index(layout)?;
         
-        let start_idx = pool_idx * CHUNKS_PER_POOL;
-        let end_idx = start_idx + CHUNKS_PER_POOL;
-        
-        for i in start_idx..end_idx {
-            let chunk = &mut self.chunks[i];
-            if !chunk.is_used() {
-                chunk.mark_used();
-                self.free_counts[pool_idx] = self.free_counts[pool_idx].saturating_sub(1);
-                return Ok(unsafe { self.memory.as_mut_ptr().add(chunk.offset()) });
-            }
+        if let Some(chunk_idx) = self.free_lists[pool_idx].take() {
+            let chunk = &mut self.chunks[chunk_idx];
+            self.free_lists[pool_idx] = chunk.next();
+            chunk.mark_used();
+            self.free_counts[pool_idx] = self.free_counts[pool_idx].saturating_sub(1);
+            
+            Ok(unsafe { self.memory.as_mut_ptr().add(chunk.offset()) })
+        } else {
+            Err(AllocError::NoSpace)
         }
-        
-        Err(AllocError::NoSpace)
     }
 
     #[inline]
@@ -74,32 +81,34 @@ impl SlabAllocator {
             return Err(AllocError::InvalidPointer);
         }
 
-        let offset = unsafe {
-            ptr.offset_from(self.memory.as_ptr()) as usize
-        };
+        let offset = unsafe { ptr.offset_from(self.memory.as_ptr()) as usize };
+        let chunk_idx = self.find_chunk_by_offset(offset)?;
+        let size = self.chunks[chunk_idx].size();
+        let pool_idx = self.get_chunk_pool_index(size);
         
-        let mut chunk_idx = None;
-        let mut chunk_size = 0;
+        let chunk = &mut self.chunks[chunk_idx];
+        chunk.mark_free(self.free_lists[pool_idx]);
+        self.free_lists[pool_idx] = Some(chunk_idx);
+        self.free_counts[pool_idx] += 1;
         
-        for (idx, chunk) in self.chunks.iter().enumerate() {
-            if chunk.offset() == offset {
-                if !chunk.is_used() {
+        Ok(())
+    }
+
+    #[inline]
+    fn find_chunk_by_offset(&self, offset: usize) -> Result<usize, AllocError> {
+        let chunk_estimate = offset / SIZES[0];
+        let search_range = (chunk_estimate.saturating_sub(1))..=(chunk_estimate + 1);
+        
+        for idx in search_range {
+            if idx < self.chunks.len() && self.chunks[idx].offset() == offset {
+                if !self.chunks[idx].is_used() {
                     return Err(AllocError::InvalidFree);
                 }
-                chunk_idx = Some(idx);
-                chunk_size = chunk.size();
-                break;
+                return Ok(idx);
             }
         }
-
-        if let Some(idx) = chunk_idx {
-            let pool_idx = self.get_chunk_pool_index(chunk_size);
-            self.chunks[idx].mark_free();
-            self.free_counts[pool_idx] += 1;
-            Ok(())
-        } else {
-            Err(AllocError::InvalidPointer)
-        }
+        
+        Err(AllocError::InvalidPointer)
     }
 
     #[inline]
@@ -108,7 +117,7 @@ impl SlabAllocator {
             free_small: self.free_counts[0],
             free_medium: self.free_counts[1],
             free_large: self.free_counts[2],
-            total_chunks: self.chunks.len(),
+            total_chunks: TOTAL_CHUNKS,
         }
     }
     
@@ -143,15 +152,15 @@ impl SlabAllocator {
     }
 }
 
-#[inline]
-const fn align_up(addr: usize, align: usize) -> usize {
-    (addr + align - 1) & !(align - 1)
-}
-
 #[derive(Debug)]
 pub struct Stats {
     pub free_small: usize,
     pub free_medium: usize,
     pub free_large: usize,
     pub total_chunks: usize,
+}
+
+#[inline]
+const fn align_up(addr: usize, align: usize) -> usize {
+    (addr + align - 1) & !(align - 1)
 }
